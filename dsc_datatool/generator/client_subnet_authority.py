@@ -4,7 +4,7 @@ See `man dsc-datatool-generator client_subnet_authority`.
 
 Part of dsc_datatool.
 
-:copyright: 2022 OARC, Inc.
+:copyright: 2024 OARC, Inc.
 """
 
 import csv
@@ -13,7 +13,7 @@ import logging
 from urllib.request import Request, urlopen
 from io import StringIO
 
-from dsc_datatool import Generator, Dataset, Dimension, args
+from dsc_datatool import Generator, Dataset, Dimension, args, encoding
 
 
 _whois2rir = {
@@ -36,6 +36,7 @@ _desig2rir = {
 
 class client_subnet_authority(Generator):
     auth = None
+    nonstrict = False
 
 
     def _read(self, input):
@@ -63,6 +64,9 @@ class client_subnet_authority(Generator):
                     else:
                         if status == 'RESERVED':
                             rir = 'IANA'
+                        elif designation == 'Segment Routing (SRv6) SIDs':
+                            # TODO: How to better handle this weird allocation?
+                            rir = 'IANA'
                         else:
                             raise Exception('Unknown whois/designation: %r/%r' % (whois, designation))
 
@@ -89,11 +93,14 @@ class client_subnet_authority(Generator):
         csvs = opts.get('csv', None)
         urlv4 = opts.get('urlv4', 'https://www.iana.org/assignments/ipv4-address-space/ipv4-address-space.csv')
         urlv6 = opts.get('urlv6', 'https://www.iana.org/assignments/ipv6-unicast-address-assignments/ipv6-unicast-address-assignments.csv')
+        if opts.get('nonstrict', False):
+            self.nonstrict = True
+
         if csvs:
             if not isinstance(csvs, list):
                 csvs = [ csvs ]
             for file in csvs:
-                with open(file, newline='') as csvfile:
+                with open(file, newline='', encoding=encoding) as csvfile:
                     self._read(csvfile)
         elif opts.get('fetch', 'no').lower() == 'yes':
             urls = opts.get('url', [ urlv4, urlv6 ])
@@ -130,7 +137,12 @@ class client_subnet_authority(Generator):
 
             auth = {}
             for subnet in subnets:
-                ip = ipaddress.ip_address(subnet)
+                try:
+                    ip = ipaddress.ip_address(subnet)
+                except Exception as e:
+                    if not self.nonstrict:
+                        raise e
+                    continue
                 if ip.version == 4:
                     idx = ipaddress.ip_network('%s/8' % ip, strict=False)
                     ip = ipaddress.ip_network('%s/32' % ip)
